@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.3"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: go build -o texvec
+
+      - name: Package
+        run: |
+          mkdir release
+          cp texvec README.md README.ja.md CONTRIBUTING.md AGENTS.md LICENSE arcnem-logo.svg release/
+          tar -czf texvec-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz -C release .
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: texvec-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: texvec-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Upload assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload ${{ github.event.release.tag_name }} artifacts/* --repo ${{ github.repository }}
