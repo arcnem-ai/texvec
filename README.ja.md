@@ -105,14 +105,16 @@ texvec embed notes.md --summary-model flan-t5-small
 texvec search notes.md
 texvec search --text "barred spiral galaxy dark matter"
 texvec search --text "barred spiral galaxy dark matter" -k 10
+texvec search --text "barred spiral galaxy dark matter" -k 10 -c 3
 texvec search notes.md -m bge-small-en-v1.5
 ```
 
-結果はコサイン距離順に並びます。検索対象の文書がすでにデータベースにある場合、その同じパスは結果から除外されます。
+結果は要約のコサイン距離で順位付けされます。各文書について、texvec は根拠として上位チャンクも表示します。検索対象の文書がすでにデータベースにある場合、その同じパスは結果から除外されます。
 
 | フラグ | 内容 | デフォルト |
 |--------|------|------------|
 | `-k, --limit` | 返す件数 | 5 |
+| `-c, --chunks` | 1文書あたりに表示する根拠チャンク数 | 1 |
 | `-m, --model` | 使用する埋め込みモデル | 設定値 |
 | `--summary-model` | 長いクエリを要約するときの要約モデル | 設定値 |
 
@@ -159,8 +161,8 @@ texvec set-summary-model flan-t5-small
 2. 内容ハッシュを計算して、再インデックスが必要か判定します。
 3. 選択した要約モデルで文書要約を生成します。
 4. 選択した埋め込みモデルで要約と、本文の重なり付きチャンクを埋め込みます。
-5. 検索では、クエリ埋め込みを要約埋め込みとチャンク埋め込みの両方に照合します。
-6. それらのスコアを統合し、文書単位でコサイン距離順に返します。
+5. 検索では、クエリ埋め込みを要約埋め込みに照合して文書を順位付けします。
+6. 上位文書に対して、同じクエリを保存済みチャンク埋め込みにも照合し、根拠となる上位チャンクを表示します。
 
 ## データ保存先
 

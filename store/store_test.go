@@ -155,10 +155,10 @@ func TestReplaceDocumentChunksAndHasDocumentChunks(t *testing.T) {
 	}
 }
 
-func TestSearchAndMerge(t *testing.T) {
+func TestSearchSummaryEmbeddings(t *testing.T) {
 	db := setupTestDB(t)
 
-	insertSearchFixture(
+	first := insertSearchFixture(
 		t,
 		db,
 		"/tmp/a.txt",
@@ -179,28 +179,90 @@ func TestSearchAndMerge(t *testing.T) {
 		"embed",
 		[]float32{0.8, 0.2, 0, 0},
 		[]ChunkInput{
-			{ChunkIndex: 0, StartLine: 1, EndLine: 1, Content: "beta", Embedding: []float32{0.9, 0.1, 0, 0}},
+			{ChunkIndex: 0, StartLine: 1, EndLine: 1, Content: "beta intro", Embedding: []float32{0.2, 0.8, 0, 0}},
+			{ChunkIndex: 1, StartLine: 5, EndLine: 6, Content: "beta chunk", Embedding: []float32{0.9, 0.1, 0, 0}},
 		},
 	)
 
-	summaryRows, err := SearchSummaryEmbeddings(db, "summary", "embed", []float32{1, 0, 0, 0}, 10, "")
+	results, err := SearchSummaryEmbeddings(db, "summary", "embed", []float32{1, 0, 0, 0}, 10, "")
 	if err != nil {
 		t.Fatalf("search summary embeddings: %v", err)
 	}
-	chunkRows, err := SearchDocumentChunks(db, "embed", []float32{1, 0, 0, 0}, 10, "")
-	if err != nil {
-		t.Fatalf("search document chunks: %v", err)
+	if len(results) != 2 {
+		t.Fatalf("expected 2 summary results, got %d", len(results))
 	}
-
-	merged := MergeSearchRows(10, summaryRows, chunkRows)
-	if len(merged) != 2 {
-		t.Fatalf("expected 2 merged rows, got %d", len(merged))
+	if results[0].Path != "/tmp/a.txt" {
+		t.Fatalf("expected best match to be a.txt, got %s", results[0].Path)
 	}
-	if merged[0].Path != "/tmp/a.txt" {
-		t.Fatalf("expected best match to be a.txt, got %s", merged[0].Path)
+	if results[0].DocumentID != first.ID {
+		t.Fatalf("expected first document id %s, got %s", first.ID, results[0].DocumentID)
 	}
-	if merged[1].Distance < merged[0].Distance {
+	if results[1].Distance < results[0].Distance {
 		t.Fatalf("expected distances to be sorted ascending")
+	}
+}
+
+func TestSearchDocumentChunksForDocuments(t *testing.T) {
+	db := setupTestDB(t)
+
+	first := insertSearchFixture(
+		t,
+		db,
+		"/tmp/a.txt",
+		"hash-a",
+		"summary",
+		"embed",
+		[]float32{1, 0, 0, 0},
+		[]ChunkInput{
+			{ChunkIndex: 0, StartLine: 1, EndLine: 2, Content: "alpha", Embedding: []float32{0.8, 0.2, 0, 0}},
+			{ChunkIndex: 1, StartLine: 5, EndLine: 6, Content: "alpha detail", Embedding: []float32{0.95, 0.05, 0, 0}},
+			{ChunkIndex: 2, StartLine: 9, EndLine: 10, Content: "alpha appendix", Embedding: []float32{0.7, 0.3, 0, 0}},
+		},
+	)
+	second := insertSearchFixture(
+		t,
+		db,
+		"/tmp/b.txt",
+		"hash-b",
+		"summary",
+		"embed",
+		[]float32{0.9, 0.1, 0, 0},
+		[]ChunkInput{
+			{ChunkIndex: 0, StartLine: 1, EndLine: 1, Content: "beta global best", Embedding: []float32{1, 0, 0, 0}},
+		},
+	)
+
+	chunksByDocument, err := SearchDocumentChunksForDocuments(
+		db,
+		"embed",
+		[]float32{1, 0, 0, 0},
+		[]string{first.ID},
+		2,
+	)
+	if err != nil {
+		t.Fatalf("search document chunks for documents: %v", err)
+	}
+	if len(chunksByDocument) != 1 {
+		t.Fatalf("expected chunk matches for 1 document, got %d", len(chunksByDocument))
+	}
+	if _, ok := chunksByDocument[second.ID]; ok {
+		t.Fatalf("did not expect chunks for unselected document %s", second.ID)
+	}
+	chunks := chunksByDocument[first.ID]
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunk matches, got %d", len(chunks))
+	}
+	if chunks[0].ChunkIndex != 1 || chunks[0].StartLine != 5 || chunks[0].EndLine != 6 {
+		t.Fatalf("expected best chunk metadata for a.txt, got index=%d lines=%d-%d", chunks[0].ChunkIndex, chunks[0].StartLine, chunks[0].EndLine)
+	}
+	if chunks[0].Content != "alpha detail" {
+		t.Fatalf("expected best chunk content, got %q", chunks[0].Content)
+	}
+	if chunks[1].ChunkIndex != 0 {
+		t.Fatalf("expected second-best chunk index 0, got %d", chunks[1].ChunkIndex)
+	}
+	if chunks[0].Distance > chunks[1].Distance {
+		t.Fatalf("expected chunk distances to be sorted ascending")
 	}
 }
 

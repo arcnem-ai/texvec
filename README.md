@@ -105,14 +105,16 @@ Search for similar documents:
 texvec search notes.md
 texvec search --text "barred spiral galaxy dark matter"
 texvec search --text "barred spiral galaxy dark matter" -k 10
+texvec search --text "barred spiral galaxy dark matter" -k 10 -c 3
 texvec search notes.md -m bge-small-en-v1.5
 ```
 
-Results are sorted by cosine distance. When searching with an already indexed document path, texvec excludes that same path from the results.
+Results are ranked by summary cosine distance. For each matching document, texvec also prints the top chunk matches as supporting evidence. When searching with an already indexed document path, texvec excludes that same path from the results.
 
 | Flag | Description | Default |
 |------|-------------|---------|
 | `-k, --limit` | Number of results | 5 |
+| `-c, --chunks` | Supporting chunks to show per result | 1 |
 | `-m, --model` | Embedding model to use | Config default |
 | `--summary-model` | Summary model to use for long-query reduction | Config default |
 
@@ -159,8 +161,8 @@ Models are downloaded from Hugging Face on first use and stored locally under `~
 2. texvec computes a content hash to determine whether indexing work needs to be refreshed.
 3. The selected summary model generates a document summary.
 4. The selected embedding model embeds both the summary and overlapping chunks from the original document.
-5. Search compares the query embedding against stored summary embeddings and chunk embeddings.
-6. texvec merges those scores and returns document-level results ordered by cosine distance.
+5. Search compares the query embedding against stored summary embeddings to rank documents.
+6. For the top documents, texvec compares the same query against stored chunk embeddings and prints the best chunk matches as evidence.
 
 ## Data Storage
 

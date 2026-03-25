@@ -4,12 +4,22 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/binary"
-	"sort"
+	"fmt"
+	"strings"
 )
 
-type SearchRow struct {
+type SearchResult struct {
 	DocumentID string
 	Path       string
+	Distance   float64
+	Chunks     []ChunkMatch
+}
+
+type ChunkMatch struct {
+	ChunkIndex int
+	StartLine  int
+	EndLine    int
+	Content    string
 	Distance   float64
 }
 
@@ -20,7 +30,7 @@ func SearchSummaryEmbeddings(
 	query []float32,
 	limit int,
 	excludePath string,
-) ([]SearchRow, error) {
+) ([]SearchResult, error) {
 	queryBlob, err := encodeSearchQuery(query)
 	if err != nil {
 		return nil, err
@@ -51,76 +61,81 @@ func SearchSummaryEmbeddings(
 	}
 	defer rows.Close()
 
-	return readSearchRows(rows)
+	return readSummarySearchResults(rows)
 }
 
-func SearchDocumentChunks(
+func SearchDocumentChunksForDocuments(
 	db *sql.DB,
 	embeddingModelID string,
 	query []float32,
+	documentIDs []string,
 	limit int,
-	excludePath string,
-) ([]SearchRow, error) {
+) (map[string][]ChunkMatch, error) {
+	if len(documentIDs) == 0 || limit < 1 {
+		return map[string][]ChunkMatch{}, nil
+	}
+
 	queryBlob, err := encodeSearchQuery(query)
 	if err != nil {
 		return nil, err
 	}
 
+	placeholders := strings.TrimRight(strings.Repeat("?, ", len(documentIDs)), ", ")
+	args := make([]any, 0, len(documentIDs)+3)
+	args = append(args, queryBlob, embeddingModelID)
+	for _, documentID := range documentIDs {
+		args = append(args, documentID)
+	}
+	args = append(args, limit)
+
 	rows, err := db.Query(
-		`SELECT
-			d.id,
-			d.path,
-			MIN(vector_distance_cos(dec.embedding, ?)) AS distance
-		FROM document_embedding_chunks dec
-		JOIN documents d ON d.id = dec.document_id
-		WHERE dec.embedding_model_id = ?
-			AND (? = '' OR d.path != ?)
-		GROUP BY d.id, d.path
-		ORDER BY distance ASC
-		LIMIT ?`,
-		queryBlob,
-		embeddingModelID,
-		excludePath,
-		excludePath,
-		limit,
+		fmt.Sprintf(
+			`WITH scored AS (
+				SELECT
+					dec.document_id,
+					dec.chunk_index,
+					dec.start_line,
+					dec.end_line,
+					dec.content,
+					vector_distance_cos(dec.embedding, ?) AS distance
+				FROM document_embedding_chunks dec
+				WHERE dec.embedding_model_id = ?
+					AND dec.document_id IN (%s)
+			),
+			ranked AS (
+				SELECT
+					document_id,
+					chunk_index,
+					start_line,
+					end_line,
+					content,
+					distance,
+					ROW_NUMBER() OVER (
+						PARTITION BY document_id
+						ORDER BY distance ASC, chunk_index ASC
+					) AS rank
+				FROM scored
+			)
+			SELECT
+				document_id,
+				chunk_index,
+				start_line,
+				end_line,
+				content,
+				distance
+			FROM ranked
+			WHERE rank <= ?
+			ORDER BY document_id ASC, rank ASC`,
+			placeholders,
+		),
+		args...,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 
-	return readSearchRows(rows)
-}
-
-func MergeSearchRows(limit int, groups ...[]SearchRow) []SearchRow {
-	best := make(map[string]SearchRow)
-
-	for _, group := range groups {
-		for _, row := range group {
-			existing, ok := best[row.DocumentID]
-			if !ok || row.Distance < existing.Distance {
-				best[row.DocumentID] = row
-			}
-		}
-	}
-
-	merged := make([]SearchRow, 0, len(best))
-	for _, row := range best {
-		merged = append(merged, row)
-	}
-
-	sort.Slice(merged, func(i, j int) bool {
-		if merged[i].Distance == merged[j].Distance {
-			return merged[i].Path < merged[j].Path
-		}
-		return merged[i].Distance < merged[j].Distance
-	})
-
-	if limit > 0 && len(merged) > limit {
-		return merged[:limit]
-	}
-
-	return merged
+	return readChunkMatches(rows)
 }
 
 func encodeSearchQuery(query []float32) ([]byte, error) {
@@ -131,14 +146,35 @@ func encodeSearchQuery(query []float32) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func readSearchRows(rows *sql.Rows) ([]SearchRow, error) {
-	var results []SearchRow
+func readSummarySearchResults(rows *sql.Rows) ([]SearchResult, error) {
+	var results []SearchResult
 	for rows.Next() {
-		var row SearchRow
+		var row SearchResult
 		if err := rows.Scan(&row.DocumentID, &row.Path, &row.Distance); err != nil {
 			return nil, err
 		}
 		results = append(results, row)
+	}
+
+	return results, rows.Err()
+}
+
+func readChunkMatches(rows *sql.Rows) (map[string][]ChunkMatch, error) {
+	results := make(map[string][]ChunkMatch)
+	for rows.Next() {
+		var documentID string
+		var row ChunkMatch
+		if err := rows.Scan(
+			&documentID,
+			&row.ChunkIndex,
+			&row.StartLine,
+			&row.EndLine,
+			&row.Content,
+			&row.Distance,
+		); err != nil {
+			return nil, err
+		}
+		results[documentID] = append(results[documentID], row)
 	}
 
 	return results, rows.Err()
